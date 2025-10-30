@@ -8,6 +8,19 @@ How to build AI systems with self-correction and long-term memory using the Refl
 - Elasticsearch Serverless with ELSER deployed
 - Ollama with llama3.1:8b model
 
+### Verify Ollama Setup
+
+After installing Ollama, verify it's running:
+```bash
+# Check if Ollama is active
+ollama list
+```
+
+Download the required model (~4.7 GB):
+```bash
+ollama pull llama3.1:8b
+```
+
 ## Setup
 
 ### 1. Install Dependencies
