@@ -33,7 +33,6 @@ Agent Responsibilities:
 
 Elastic Cloud Integration:
 - Hybrid Search: ELSER (semantic_text field) + BM25 (keyword)
-- State Checkpointing: agent-checkpoints index
 - Long-Term Memory: agent-memory index
 - RAG: incident-logs index with semantic_text field
 
@@ -95,71 +94,6 @@ class IncidentState(TypedDict):
     quality_score: float
     iteration: int
     max_iterations: int
-
-
-# ============================================================================
-# ELASTICSEARCH CHECKPOINT SAVER (Custom)
-# ============================================================================
-
-class ElasticCheckpointSaver(BaseCheckpointSaver):
-    """
-    Custom Checkpoint Saver using Elasticsearch
-
-    Saves graph state to: agent-checkpoints index
-    Enables retry, replay, debugging
-    """
-
-    def __init__(self, es: Elasticsearch, index: str = "agent-checkpoints"):
-        self.es = es
-        self.index = index
-
-    def put(self, config, checkpoint, metadata):
-        """Saves checkpoint to Elasticsearch"""
-        doc = {
-            "thread_id": config.get("configurable", {}).get("thread_id", "default"),
-            "checkpoint_id": checkpoint.get("id"),
-            "timestamp": datetime.now().isoformat(),
-            "state": checkpoint,
-            "metadata": metadata
-        }
-
-        self.es.index(index=self.index, body=doc)
-        logger.info(f"Checkpoint saved: {checkpoint.get('id')}")
-
-    def get(self, config):
-        """Retrieves last checkpoint"""
-        thread_id = config.get("configurable", {}).get("thread_id", "default")
-
-        try:
-            result = self.es.search(
-                index=self.index,
-                body={
-                    "query": {"term": {"thread_id": thread_id}},
-                    "sort": [{"timestamp": {"order": "desc"}}],
-                    "size": 1
-                }
-            )
-
-            if result["hits"]["hits"]:
-                return result["hits"]["hits"][0]["_source"]["state"]
-        except Exception as e:
-            logger.error(f"Error retrieving checkpoint: {e}")
-
-        return None
-
-    def list(self, config):
-        """Lists available checkpoints"""
-        thread_id = config.get("configurable", {}).get("thread_id", "default")
-
-        result = self.es.search(
-            index=self.index,
-            body={
-                "query": {"term": {"thread_id": thread_id}},
-                "sort": [{"timestamp": {"order": "desc"}}]
-            }
-        )
-
-        return [hit["_source"]["state"] for hit in result["hits"]["hits"]]
 
 
 # ============================================================================
