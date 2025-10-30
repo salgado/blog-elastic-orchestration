@@ -46,7 +46,6 @@ import logging
 
 # LangGraph & LangChain
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.base import BaseCheckpointSaver
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.graph.message import add_messages
 from langchain_ollama import ChatOllama

@@ -59,7 +59,6 @@ class ElasticCloudConfig:
 
         # Index names from environment
         self.index_logs = os.getenv("ELASTIC_INDEX_LOGS", "incident-logs")
-        self.index_state = os.getenv("ELASTIC_INDEX_STATE", "agent-checkpoints")
         self.index_memory = os.getenv("ELASTIC_INDEX_MEMORY", "agent-memory")
 
         # ELSER configuration
@@ -149,7 +148,6 @@ class ElasticCloudConfig:
         try:
             indices_health = {
                 "logs": self.es.indices.exists(index=self.index_logs),
-                "state": self.es.indices.exists(index=self.index_state),
                 "memory": self.es.indices.exists(index=self.index_memory)
             }
 
@@ -209,7 +207,7 @@ class ElasticCloudConfig:
 
         IMPORTANT: The incident-logs index with ELSER semantic_text field
         should be created by running setup_elser_serverless.py first.
-        This method only creates the checkpoint and memory indices.
+        This method only creates the memory indices.
         """
         logger.info("Checking indices...")
 
@@ -224,29 +222,6 @@ class ElasticCloudConfig:
             logger.warning("Please run 'python setup_elser_serverless.py' first to create the index with ELSER configuration.")
             logger.warning("Skipping automatic creation to avoid incorrect schema.")
 
-        # Agent checkpoints index
-        if not self.es.indices.exists(index=self.index_state):
-            logger.info(f"Creating index: {self.index_state}")
-
-            index_body = {
-                "mappings": {
-                    "properties": {
-                        "thread_id": {"type": "keyword"},
-                        "checkpoint_id": {"type": "keyword"},
-                        "timestamp": {"type": "date"},
-                        "state": {"type": "object", "enabled": False},
-                        "metadata": {"type": "object"}
-                    }
-                }
-            }
-
-            if not is_serverless:
-                index_body["settings"] = {
-                    "number_of_shards": 1,
-                    "number_of_replicas": 1
-                }
-
-            self.es.indices.create(index=self.index_state, body=index_body)
 
         # Long-term memory index
         if not self.es.indices.exists(index=self.index_memory):

@@ -76,7 +76,6 @@ Edit `.env` to customize:
 ```bash
 # Optional (defaults provided)
 ELASTIC_INDEX_LOGS=incident-logs
-ELASTIC_INDEX_STATE=agent-checkpoints
 ELASTIC_INDEX_MEMORY=agent-memory
 MAX_REFLECTION_ITERATIONS=3
 QUALITY_THRESHOLD=0.8
