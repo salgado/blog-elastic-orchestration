@@ -40,6 +40,7 @@ Author: Tutorial LangGraph + Elastic
 """
 
 import os
+import re
 from typing import TypedDict, Annotated, List, Literal
 from datetime import datetime
 import logging
@@ -49,6 +50,7 @@ from langgraph.graph import StateGraph, END
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.graph.message import add_messages
 from langchain_ollama import ChatOllama
+from langchain_anthropic import ChatAnthropic
 
 # Elastic
 from elasticsearch import Elasticsearch
@@ -93,6 +95,43 @@ class IncidentState(TypedDict):
     quality_score: float
     iteration: int
     max_iterations: int
+
+
+# ============================================================================
+# LLM CONFIGURATION
+# ============================================================================
+
+def get_llm(temperature: float = 0.3):
+    """
+    Returns configured LLM based on environment variables
+    
+    Supports: Ollama (local), Anthropic (Claude)
+    """
+    provider = os.getenv("LLM_PROVIDER", "ollama").lower()
+    
+    if provider == "anthropic":
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        model = os.getenv("LLM_MODEL", "claude-sonnet-4-20250514")
+        
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY not set in environment")
+        
+        logger.info(f"Using Anthropic model: {model}")
+        return ChatAnthropic(
+            model=model,
+            temperature=temperature,
+            api_key=api_key
+        )
+    else:  # Default to Ollama
+        model = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        
+        logger.info(f"Using Ollama model: {model}")
+        return ChatOllama(
+            model=model,
+            temperature=temperature,
+            base_url=base_url
+        )
 
 
 # ============================================================================
@@ -190,6 +229,63 @@ def save_to_long_term_memory(
     logger.info(f"LTM saved: {agent_name} - {memory_type}")
 
 
+def retrieve_past_solutions(es: Elasticsearch, query: str, top_k: int = 3) -> List[dict]:
+    """
+    Retrieves similar past solutions from Long-Term Memory
+    
+    Only retrieves solutions with quality_score >= 0.80 and success=True
+    """
+    config = get_elastic_config()
+    
+    try:
+        result = es.search(
+            index=config.index_memory,
+            body={
+                "query": {
+                    "bool": {
+                        "must": [
+                            {
+                                "match": {
+                                    "content": {
+                                        "query": query,
+                                        "boost": 2.0
+                                    }
+                                }
+                            }
+                        ],
+                        "filter": [
+                            {"term": {"success": True}},
+                            {"range": {"metadata.quality_score": {"gte": 0.80}}}
+                        ]
+                    }
+                },
+                "sort": [
+                    {"_score": {"order": "desc"}},
+                    {"timestamp": {"order": "desc"}}
+                ],
+                "size": top_k
+            }
+        )
+        
+        solutions = []
+        for hit in result["hits"]["hits"]:
+            source = hit["_source"]
+            solutions.append({
+                "content": source.get("content", ""),
+                "score": hit["_score"],
+                "quality_score": source.get("metadata", {}).get("quality_score", 0),
+                "timestamp": source.get("timestamp", ""),
+                "iterations": source.get("metadata", {}).get("iterations", 0)
+            })
+        
+        logger.info(f"Retrieved {len(solutions)} past solutions (threshold: 0.80)")
+        return solutions
+        
+    except Exception as e:
+        logger.warning(f"Could not retrieve past solutions: {e}")
+        return []
+
+
 # ============================================================================
 # AGENT NODES
 # ============================================================================
@@ -215,7 +311,7 @@ def search_agent(state: IncidentState) -> IncidentState:
 
     # Search incidents
     query = state["query"]
-    search_results = hybrid_search_incidents(es, query, size=5)
+    search_results = hybrid_search_incidents(es, query, size=15)
 
     # Update state
     state["search_results"] = search_results
@@ -247,6 +343,19 @@ def analyser_agent(state: IncidentState) -> IncidentState:
     # Read search results from state (already populated by SearchAgent)
     search_results = state.get("search_results", [])
     query = state["query"]
+    
+    # Retrieve past solutions from LTM
+    es = get_elastic_client()
+    past_solutions = retrieve_past_solutions(es, query, top_k=3)
+    
+    # Format past solutions for prompt
+    past_context = ""
+    if past_solutions:
+        past_context = "\n\n**SIMILAR PAST INCIDENTS (for reference):**\n"
+        for i, sol in enumerate(past_solutions, 1):
+            past_context += f"\n{i}. (Quality: {sol['quality_score']:.2f}, Iterations: {sol['iterations']})\n"
+            past_context += f"{sol['content']}\n"
+        past_context += "\n(Use these as templates, but analyze current logs independently)\n"
 
     if not search_results:
         logger.warning("No search results found in state")
@@ -263,10 +372,7 @@ def analyser_agent(state: IncidentState) -> IncidentState:
     ])
 
     # LLM analysis
-    llm = ChatOllama(
-        model=os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
-        temperature=0.3
-    )
+    llm = get_llm(temperature=0.3)
 
     # Consider previous reflection if exists
     previous_feedback = state.get("reflection", "")
@@ -279,6 +385,7 @@ def analyser_agent(state: IncidentState) -> IncidentState:
 **Logs found:**
 {context}
 {feedback_context}
+{past_context}
 
 **Task:**
 Analyze the logs and provide:
@@ -321,10 +428,7 @@ def reflection_agent(state: IncidentState) -> IncidentState:
 
     analysis = state["analysis"]
 
-    llm = ChatOllama(
-        model=os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
-        temperature=0.2
-    )
+    llm = get_llm(temperature=0.2)
 
     prompt = f"""You are a technical analysis critic.
 
@@ -338,9 +442,14 @@ Evaluate the analysis quality using these criteria:
 3. **Actionability**: Are recommended actions clear and specific? (0-25 points)
 4. **Precision**: Are conclusions logical and well-founded? (0-25 points)
 
-**Response format:**
-SCORE: [0-100]
+**Response format (IMPORTANT - follow exactly):**
+SCORE: 80
 FEEDBACK: [your detailed critique and improvement suggestions]
+
+The SCORE must be a single number between 0-100 on the same line as "SCORE:". 
+Do NOT use markdown formatting in the SCORE line (no asterisks, bold, etc.).
+Example: "SCORE: 75" or "SCORE: 75/100" are acceptable.
+Example of WRONG format: "**SCORE:** 75" or "SCORE: **75**"
 
 Be critical but constructive."""
 
@@ -355,8 +464,34 @@ Be critical but constructive."""
     # Parse score
     try:
         score_line = [line for line in reflection_text.split('\n') if 'SCORE:' in line][0]
-        score = int(score_line.split(':')[1].strip()) / 100.0
-    except:
+        score_str = score_line.split(':')[1].strip()
+        
+        # Remove markdown formatting (**, *, etc.) and extra spaces
+        score_str = re.sub(r'\*+', '', score_str)  # Remove asterisks
+        score_str = score_str.strip()
+        
+        # Extract first number found (handles cases like "80/100", "80", "** 80", etc.)
+        numbers = re.findall(r'\d+', score_str)
+        if not numbers:
+            raise ValueError("No number found in score")
+        
+        score_value = int(numbers[0])
+        
+        # If format is "80/100", use the denominator; otherwise assume out of 100
+        if '/' in score_str and len(numbers) > 1:
+            score = score_value / int(numbers[1])
+        else:
+            # If number > 1, assume it's already 0-100 scale; if <= 1, assume 0-1 scale
+            score = score_value / 100.0 if score_value > 1 else score_value
+        
+        # Ensure score is in valid range [0, 1]
+        score = max(0.0, min(1.0, score))
+        
+        logger.info(f"Parsed score: {score:.2f} from line: {score_line}")
+    except Exception as e:
+        logger.warning(f"Failed to parse score: {e}")
+        logger.warning(f"Reflection text (first 200 chars): {reflection_text[:200]}")
+        logger.warning(f"Defaulting to 0.5")
         score = 0.5  # Default if parsing fails
 
     # Update state
@@ -396,7 +531,8 @@ def finalize_output(state: IncidentState) -> IncidentState:
         metadata={
             "query": state["query"],
             "quality_score": state["quality_score"],
-            "iterations": state["iteration"]
+            "iterations": state["iteration"],
+            "logs_analyzed": len(state.get("search_results", []))
         }
     )
 
