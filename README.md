@@ -8,19 +8,6 @@ How to build AI systems with self-correction and long-term memory using the Refl
 - Elasticsearch Serverless with ELSER deployed
 - Ollama with llama3.1:8b model
 
-### Verify Ollama Setup
-
-After installing Ollama, verify it's running:
-```bash
-# Check if Ollama is active
-ollama list
-```
-
-Download the required model (~4.7 GB):
-```bash
-ollama pull llama3.1:8b
-```
-
 ## Setup
 
 ### 1. Install Dependencies
@@ -53,31 +40,11 @@ Required variables:
 ```bash
 ELASTIC_ENDPOINT=https://your-deployment.es.region.gcp.elastic-cloud.com:443
 ELASTIC_API_KEY=your-base64-api-key
-OLLAMA_MODEL=llama3.1:8b
-```
-
-## Multi-LLM Support
-
-This POC supports multiple LLM providers:
-
-**Local Development (Ollama):**
-```bash
-# In .env
 LLM_PROVIDER=ollama
 OLLAMA_MODEL=llama3.1:8b
-
-python elastic_reflection_poc.py "database connection timeout"
 ```
 
-**Production (Anthropic Claude):**
-```bash
-# In .env
-LLM_PROVIDER=anthropic
-LLM_MODEL=claude-sonnet-4-20250514
-ANTHROPIC_API_KEY=sk-ant-your-key
-
-python elastic_reflection_poc.py "database connection timeout"
-```
+**Note:** Ensure Ollama is running with `ollama pull llama3.1:8b`
 
 ### 3. Setup ELSER (Run Once)
 
@@ -107,31 +74,17 @@ python elastic_reflection_poc.py "database connection timeout"
 
 ## Configuration
 
-Edit `.env` to customize:
+Optional environment variables (defaults provided):
 
 ```bash
-# Optional (defaults provided)
 ELASTIC_INDEX_LOGS=incident-logs
 ELASTIC_INDEX_MEMORY=agent-memory
 MAX_REFLECTION_ITERATIONS=3
 QUALITY_THRESHOLD=0.8
 
-# LLM Configuration
-# ==================
-
-# LLM Provider: "ollama" (local) or "anthropic" (cloud)
-LLM_PROVIDER=ollama
-
-# Model name (used when LLM_PROVIDER=anthropic)
-LLM_MODEL=claude-sonnet-4-20250514
-
-# Ollama Configuration (local development - free)
+# Ollama
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama3.1:8b
-
-# Anthropic Configuration (production - requires API key)
-# Get key from: https://console.anthropic.com/settings/keys
-# ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ## Architecture
