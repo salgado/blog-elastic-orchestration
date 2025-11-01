@@ -61,10 +61,6 @@ class ElasticCloudConfig:
         self.index_logs = os.getenv("ELASTIC_INDEX_LOGS", "incident-logs")
         self.index_memory = os.getenv("ELASTIC_INDEX_MEMORY", "agent-memory")
 
-        # ELSER configuration
-        self.elser_model_id = os.getenv("ELSER_MODEL_ID", ".elser_model_2")
-        self.elser_pipeline = os.getenv("ELSER_PIPELINE", "elser-ingest-pipeline")
-
         # Validate credentials
         if not self.api_key:
             raise ValueError("ELASTIC_API_KEY not found in environment variables")
@@ -190,13 +186,23 @@ class ElasticCloudConfig:
             return {"error": str(e)}
 
     def _check_elser(self) -> bool:
-        """Check if ELSER model is deployed"""
+        """Check if ELSER inference endpoint is available (Serverless compatible)"""
         try:
-            stats = self.es.ml.get_trained_models_stats(model_id=self.elser_model_id)
-            if stats['trained_model_stats']:
-                deployment_stats = stats['trained_model_stats'][0].get('deployment_stats', {})
-                state = deployment_stats.get('state', 'not_deployed')
-                return state == 'started'
+            # Check for inference endpoint (Serverless/modern approach)
+            inference_id = "elser-incident-analysis"
+            try:
+                endpoint = self.es.inference.get(inference_id=inference_id)
+                return endpoint is not None
+            except Exception:
+                # Fallback: Check for traditional ML model deployment (legacy)
+                try:
+                    stats = self.es.ml.get_trained_models_stats(model_id=".elser_model_2")
+                    if stats['trained_model_stats']:
+                        deployment_stats = stats['trained_model_stats'][0].get('deployment_stats', {})
+                        state = deployment_stats.get('state', 'not_deployed')
+                        return state == 'started'
+                except Exception:
+                    pass
             return False
         except Exception:
             return False
@@ -223,9 +229,12 @@ class ElasticCloudConfig:
             logger.warning("Skipping automatic creation to avoid incorrect schema.")
 
 
-        # Long-term memory index
+        # Long-term memory index with semantic_text field for semantic search
         if not self.es.indices.exists(index=self.index_memory):
             logger.info(f"Creating index: {self.index_memory}")
+
+            # Get inference endpoint ID (same as used for incident-logs)
+            inference_id = "elser-incident-analysis"
 
             index_body = {
                 "mappings": {
@@ -233,7 +242,17 @@ class ElasticCloudConfig:
                         "memory_id": {"type": "keyword"},
                         "agent_name": {"type": "keyword"},
                         "memory_type": {"type": "keyword"},
-                        "content": {"type": "text"},
+                        "content": {
+                            "type": "text",
+                            "fields": {
+                                "keyword": {"type": "keyword"}
+                            }
+                        },
+                        # Semantic search field - enables concept-based retrieval
+                        "semantic_content": {
+                            "type": "semantic_text",
+                            "inference_id": inference_id  # Links to ELSER endpoint
+                        },
                         "timestamp": {"type": "date"},
                         "success": {"type": "boolean"},
                         "metadata": {"type": "object"}

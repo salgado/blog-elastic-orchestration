@@ -24,7 +24,7 @@ Architecture (3 Specialized Agents):
    (runs once)                    ▲                │
                                   │                │
                                   └────[decisor]───┘
-                                   (quality < 0.8?)
+                                   (quality < QUALITY_THRESHOLD?)
 
 Agent Responsibilities:
 1. SearchAgent: Hybrid search (ELSER semantic + BM25 keyword)
@@ -212,6 +212,9 @@ def save_to_long_term_memory(
 
     Types: "decision", "lesson", "pattern"
     Used to improve agents over time
+    
+    The semantic_content field enables semantic search, allowing retrieval
+    of similar solutions even when using different words.
     """
     config = get_elastic_config()
 
@@ -220,6 +223,8 @@ def save_to_long_term_memory(
         "agent_name": agent_name,
         "memory_type": memory_type,
         "content": content,
+        # Semantic content field - enables semantic search on concepts
+        "semantic_content": content,  # ELSER will auto-generate embeddings
         "timestamp": datetime.now().isoformat(),
         "success": success,
         "metadata": metadata or {}
@@ -231,11 +236,18 @@ def save_to_long_term_memory(
 
 def retrieve_past_solutions(es: Elasticsearch, query: str, top_k: int = 3) -> List[dict]:
     """
-    Retrieves similar past solutions from Long-Term Memory
+    Retrieves similar past solutions from Long-Term Memory using semantic search
     
-    Only retrieves solutions with quality_score >= 0.80 and success=True
+    Uses hybrid search (semantic + keyword) to find similar solutions even with different words.
+    Only retrieves solutions with quality_score >= QUALITY_THRESHOLD and success=True.
+    Uses QUALITY_THRESHOLD from environment (default: 0.8).
+    
+    Example:
+        Query: "database timeout"
+        Finds: "connection pool exhaustion" (different words, same concept)
     """
     config = get_elastic_config()
+    quality_threshold = float(os.getenv("QUALITY_THRESHOLD", "0.8"))
     
     try:
         result = es.search(
@@ -243,19 +255,28 @@ def retrieve_past_solutions(es: Elasticsearch, query: str, top_k: int = 3) -> Li
             body={
                 "query": {
                     "bool": {
-                        "must": [
+                        "should": [
+                            # Semantic search (ELSER) - finds similar concepts
+                            {
+                                "semantic": {
+                                    "field": "semantic_content",
+                                    "query": query
+                                }
+                            },
+                            # Keyword search (BM25) - finds exact word matches
                             {
                                 "match": {
                                     "content": {
                                         "query": query,
-                                        "boost": 2.0
+                                        "boost": 1.0
                                     }
                                 }
                             }
                         ],
+                        "minimum_should_match": 1,  # At least one should match
                         "filter": [
                             {"term": {"success": True}},
-                            {"range": {"metadata.quality_score": {"gte": 0.80}}}
+                            {"range": {"metadata.quality_score": {"gte": quality_threshold}}}
                         ]
                     }
                 },
@@ -278,7 +299,7 @@ def retrieve_past_solutions(es: Elasticsearch, query: str, top_k: int = 3) -> Li
                 "iterations": source.get("metadata", {}).get("iterations", 0)
             })
         
-        logger.info(f"Retrieved {len(solutions)} past solutions (threshold: 0.80)")
+        logger.info(f"Retrieved {len(solutions)} past solutions (threshold: {quality_threshold})")
         return solutions
         
     except Exception as e:
@@ -553,9 +574,11 @@ def decisor_router(state: IncidentState) -> Literal["increment", "finalize"]:
     Decisor Router: Defines next step in Reflection cycle
 
     Logic:
-    - quality_score >= 0.8 -> finalize (success)
+    - quality_score >= QUALITY_THRESHOLD -> finalize (success)
     - iteration >= max_iterations -> finalize (limit reached)
     - otherwise -> increment -> analyser (new iteration)
+    
+    QUALITY_THRESHOLD comes from environment variable (default: 0.8)
     """
     quality = state["quality_score"]
     iteration = state["iteration"]

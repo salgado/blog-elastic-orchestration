@@ -43,6 +43,29 @@ ELASTIC_API_KEY=your-base64-api-key
 OLLAMA_MODEL=llama3.1:8b
 ```
 
+## Multi-LLM Support
+
+This POC supports multiple LLM providers:
+
+**Local Development (Ollama):**
+```bash
+# In .env
+LLM_PROVIDER=ollama
+OLLAMA_MODEL=llama3.1:8b
+
+python elastic_reflection_poc.py "database connection timeout"
+```
+
+**Production (Anthropic Claude):**
+```bash
+# In .env
+LLM_PROVIDER=anthropic
+LLM_MODEL=claude-sonnet-4-20250514
+ANTHROPIC_API_KEY=sk-ant-your-key
+
+python elastic_reflection_poc.py "database connection timeout"
+```
+
 ### 3. Setup ELSER (Run Once)
 
 ```bash
@@ -54,7 +77,7 @@ Expected output:
 SETUP COMPLETE!
 1. Inference Endpoint: 'elser-incident-analysis'
 2. Index: 'incident-logs' with semantic_text field
-3. Sample data: 5 incident logs
+3. Sample data: 15 incident logs
 4. Semantic search: Tested and working
 5. Hybrid search: Tested and working
 ```
@@ -79,7 +102,39 @@ ELASTIC_INDEX_LOGS=incident-logs
 ELASTIC_INDEX_MEMORY=agent-memory
 MAX_REFLECTION_ITERATIONS=3
 QUALITY_THRESHOLD=0.8
+
+# LLM Configuration
+# ==================
+
+# LLM Provider: "ollama" (local) or "anthropic" (cloud)
+LLM_PROVIDER=ollama
+
+# Model name (used when LLM_PROVIDER=anthropic)
+LLM_MODEL=claude-sonnet-4-20250514
+
+# Ollama Configuration (local development - free)
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3.1:8b
+
+# Anthropic Configuration (production - requires API key)
+# Get key from: https://console.anthropic.com/settings/keys
+# ANTHROPIC_API_KEY=sk-ant-...
 ```
+
+## Architecture
+
+The system uses two Elasticsearch indices:
+
+1. **`incident-logs`**: Stores incident logs with semantic search (`semantic_content` field)
+   - Created by `setup_elser_serverless.py`
+   - Used by SearchAgent for hybrid search (semantic + keyword)
+
+2. **`agent-memory`**: Long-Term Memory (LTM) storing successful analyses
+   - Created automatically at runtime by `elastic_config.py`
+   - Also uses semantic search (`semantic_content` field) for concept-based retrieval
+   - Used by AnalyserAgent to retrieve similar past solutions
+
+Both indices use **hybrid search** (semantic ELSER + keyword BM25) for optimal retrieval.
 
 ## Files
 
