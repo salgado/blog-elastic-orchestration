@@ -5,7 +5,7 @@ Multi-Agent Orchestration with Reflection Pattern
 POC: Incident Analysis with Self-Correction Loop
 
 PREREQUISITES:
-  1. Run setup_elser_serverless.py FIRST to create incident-logs index
+  1. Run setup_elser.py FIRST to create incident-logs index
   2. Ensure .env file has correct Elasticsearch credentials
   3. Verify ELSER model is deployed and running
 
@@ -142,7 +142,7 @@ def hybrid_search_incidents(es: Elasticsearch, query: str, size: int = 5) -> Lis
     """
     Hybrid Search: ELSER (semantic) + BM25 (keyword)
 
-    Serverless approach using semantic_text field type
+    Uses semantic_text field type for semantic search with ELSER
     """
     config = get_elastic_config()
 

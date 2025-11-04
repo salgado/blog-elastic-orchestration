@@ -1,14 +1,16 @@
 """
-ELSER Setup for Serverless Elasticsearch
-=========================================
+ELSER Setup for Elasticsearch
+==============================
 
 Automated script to:
 1. Create Inference Endpoint for ELSER
-2. Recreate incident-logs index with semantic_text field
+2. Create incident-logs index with semantic_text field
 3. Test semantic search
 
+Works with both traditional Elasticsearch deployments and Serverless.
+
 Usage:
-    python setup_elser_serverless.py
+    python setup_elser.py
 """
 
 import os
@@ -16,6 +18,7 @@ from dotenv import load_dotenv
 from elasticsearch import Elasticsearch
 import logging
 from datetime import datetime, timedelta, timezone
+from elastic_config import get_elastic_config, get_elastic_client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,27 +28,12 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 
-def get_es_client():
-    """Get Elasticsearch client"""
-    endpoint = os.getenv("ELASTIC_ENDPOINT")
-    api_key = os.getenv("ELASTIC_API_KEY")
-
-    if not endpoint or not api_key:
-        raise ValueError("ELASTIC_ENDPOINT and ELASTIC_API_KEY must be set in .env")
-
-    return Elasticsearch(
-        hosts=[endpoint],
-        api_key=api_key,
-        request_timeout=30
-    )
-
-
 def create_inference_endpoint(es: Elasticsearch):
     """
     Create Inference Endpoint for ELSER
 
-    In Serverless, Inference Endpoints are the modern way to use ML models.
-    They replace traditional ingest pipelines and are reusable across indices.
+    Inference Endpoints are the modern way to use ML models in Elasticsearch.
+    They are reusable across indices and optimized for search (low latency).
     """
     inference_id = "elser-incident-analysis"
 
@@ -97,10 +85,7 @@ def create_inference_endpoint(es: Elasticsearch):
 
 def recreate_incident_logs_index(es: Elasticsearch, inference_id: str):
     """
-    Recreate incident-logs index with semantic_text field
-
-    IMPORTANT: This is the CORRECT way to create the incident-logs index
-    for Serverless Elasticsearch. Do NOT use elastic_config.py for this.
+    Create incident-logs index with semantic_text field
 
     The semantic_text field type automatically:
     - Calls the inference endpoint when documents are indexed
@@ -109,50 +94,57 @@ def recreate_incident_logs_index(es: Elasticsearch, inference_id: str):
 
     Modern approach (used here):
       semantic_text + inference_id = automatic ELSER embeddings
-
-    Legacy approach (DO NOT USE):
-      ml.tokens + ingest pipeline = manual ELSER configuration
     """
-    index_name = os.getenv("ELASTIC_INDEX_LOGS", "incident-logs")
+    config = get_elastic_config()
+    index_name = config.index_logs
 
     logger.info("=" * 70)
-    logger.info("STEP 2: Recreating incident-logs Index")
+    logger.info("STEP 2: Creating incident-logs Index")
     logger.info("=" * 70)
 
-    # Delete existing index
+    # Delete existing index if it exists
     if es.indices.exists(index=index_name):
         logger.info(f"Deleting existing index: {index_name}")
         es.indices.delete(index=index_name)
 
+    # Determine if using serverless (no shards/replicas config)
+    is_serverless = not config.cloud_id
+
     # Create new index with semantic_text field
     logger.info(f"Creating index: {index_name} with semantic_text field")
 
-    es.indices.create(
-        index=index_name,
-        body={
-            "mappings": {
-                "properties": {
-                    "timestamp": {"type": "date"},
-                    "level": {"type": "keyword"},
-                    "message": {"type": "text"},
-                    "content": {
-                        "type": "text",
-                        "fields": {
-                            "keyword": {"type": "keyword"}
-                        }
-                    },
-                    # SEMANTIC TEXT FIELD - Auto-generates embeddings!
-                    "semantic_content": {
-                        "type": "semantic_text",
-                        "inference_id": inference_id  # Links to ELSER endpoint
-                    },
-                    "service": {"type": "keyword"},
-                    "host": {"type": "keyword"},
-                    "metadata": {"type": "object"}
-                }
+    index_body = {
+        "mappings": {
+            "properties": {
+                "timestamp": {"type": "date"},
+                "level": {"type": "keyword"},
+                "message": {"type": "text"},
+                "content": {
+                    "type": "text",
+                    "fields": {
+                        "keyword": {"type": "keyword"}
+                    }
+                },
+                # SEMANTIC TEXT FIELD - Auto-generates embeddings!
+                "semantic_content": {
+                    "type": "semantic_text",
+                    "inference_id": inference_id  # Links to ELSER endpoint
+                },
+                "service": {"type": "keyword"},
+                "host": {"type": "keyword"},
+                "metadata": {"type": "object"}
             }
         }
-    )
+    }
+
+    # Add settings for traditional deployments (not applicable to Serverless)
+    if not is_serverless:
+        index_body["settings"] = {
+            "number_of_shards": 1,
+            "number_of_replicas": 1
+        }
+
+    es.indices.create(index=index_name, body=index_body)
 
     logger.info(f"Index '{index_name}' created successfully!")
     logger.info("")
@@ -172,7 +164,8 @@ def ingest_sample_data(es: Elasticsearch):
     2. Generates embeddings from 'content' field
     3. Stores embeddings in 'semantic_content'
     """
-    index_name = os.getenv("ELASTIC_INDEX_LOGS", "incident-logs")
+    config = get_elastic_config()
+    index_name = config.index_logs
 
     logger.info("=" * 70)
     logger.info("STEP 3: Ingesting Sample Data")
@@ -464,7 +457,8 @@ def test_semantic_search(es: Elasticsearch):
     - Query: "database failures"
     - Finds: "timeout", "slow query", "connection issues"
     """
-    index_name = os.getenv("ELASTIC_INDEX_LOGS", "incident-logs")
+    config = get_elastic_config()
+    index_name = config.index_logs
 
     logger.info("=" * 70)
     logger.info("STEP 4: Testing Semantic Search")
@@ -520,7 +514,8 @@ def test_hybrid_search(es: Elasticsearch):
     - Semantic understanding (ELSER)
     - Exact keyword matching (BM25)
     """
-    index_name = os.getenv("ELASTIC_INDEX_LOGS", "incident-logs")
+    config = get_elastic_config()
+    index_name = config.index_logs
 
     logger.info("=" * 70)
     logger.info("STEP 5: Testing Hybrid Search (Semantic + Keyword)")
@@ -579,18 +574,20 @@ def test_hybrid_search(es: Elasticsearch):
 def main():
     """Run complete ELSER setup"""
     print("\n" + "=" * 70)
-    print("ELSER SETUP FOR SERVERLESS ELASTICSEARCH")
+    print("ELSER SETUP FOR ELASTICSEARCH")
     print("=" * 70 + "\n")
 
     try:
-        # Get client
-        es = get_es_client()
-        logger.info("Connected to Elasticsearch Serverless\n")
+        # Get client using elastic_config (supports both traditional and serverless)
+        es = get_elastic_client()
+        config = get_elastic_config()
+        deployment_type = "Serverless" if not config.cloud_id else "Traditional"
+        logger.info(f"Connected to Elasticsearch ({deployment_type})\n")
 
         # Step 1: Create inference endpoint
         inference_id = create_inference_endpoint(es)
 
-        # Step 2: Recreate index with semantic_text
+        # Step 2: Create index with semantic_text
         recreate_incident_logs_index(es, inference_id)
 
         # Step 3: Ingest sample data
@@ -627,3 +624,4 @@ def main():
 
 if __name__ == "__main__":
     exit(main())
+

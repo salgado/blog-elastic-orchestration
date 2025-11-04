@@ -5,7 +5,7 @@ How to build AI systems with self-correction and long-term memory using the Refl
 ## Prerequisites
 
 - Python 3.10+
-- Elasticsearch Serverless with ELSER deployed
+- Elasticsearch (Traditional or Serverless) with ELSER deployed
 - Ollama with llama3.1:8b model
 
 ## Setup
@@ -36,7 +36,17 @@ cp .env.example .env
 nano .env
 ```
 
-Required variables:
+Required variables (choose one connection method):
+
+**Option 1: Traditional Elasticsearch (Cloud ID)**
+```bash
+ELASTIC_CLOUD_ID=your-cloud-id
+ELASTIC_API_KEY=your-base64-api-key
+LLM_PROVIDER=ollama
+OLLAMA_MODEL=llama3.1:8b
+```
+
+**Option 2: Serverless or Direct Endpoint**
 ```bash
 ELASTIC_ENDPOINT=https://your-deployment.es.region.gcp.elastic-cloud.com:443
 ELASTIC_API_KEY=your-base64-api-key
@@ -49,7 +59,7 @@ OLLAMA_MODEL=llama3.1:8b
 ### 3. Setup ELSER (Run Once)
 
 ```bash
-python setup_elser_serverless.py
+python setup_elser.py
 ```
 
 Expected output:
@@ -92,7 +102,7 @@ OLLAMA_MODEL=llama3.1:8b
 The system uses two Elasticsearch indices:
 
 1. **`incident-logs`**: Stores incident logs with semantic search (`semantic_content` field)
-   - Created by `setup_elser_serverless.py`
+   - Created by `setup_elser.py`
    - Used by SearchAgent for hybrid search (semantic + keyword)
 
 2. **`agent-memory`**: Long-Term Memory (LTM) storing successful analyses
@@ -112,7 +122,7 @@ blog-elastic-reflection/
 ├── README.md                # This file
 ├── elastic_config.py        # Elasticsearch connection
 ├── elastic_reflection_poc.py # Main POC
-└── setup_elser_serverless.py # ELSER setup
+└── setup_elser.py           # ELSER setup
 ```
 
 ## License

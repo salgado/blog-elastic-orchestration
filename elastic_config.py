@@ -70,8 +70,8 @@ class ElasticCloudConfig:
 
         # Initialize Elasticsearch client
         if self.endpoint:
-            # Serverless or direct endpoint
-            logger.info(f"Connecting to Elasticsearch Serverless: {self.endpoint}")
+            # Direct endpoint connection (Serverless or custom endpoint)
+            logger.info(f"Connecting to Elasticsearch via endpoint: {self.endpoint}")
             self.es = Elasticsearch(
                 hosts=[self.endpoint],
                 api_key=self.api_key,
@@ -80,7 +80,7 @@ class ElasticCloudConfig:
                 retry_on_timeout=retry_on_timeout
             )
         else:
-            # Traditional Cloud deployment
+            # Traditional Cloud deployment (Cloud ID)
             logger.info(f"Connecting to Elasticsearch Cloud (Cloud ID)")
             self.es = Elasticsearch(
                 cloud_id=self.cloud_id,
@@ -105,15 +105,15 @@ class ElasticCloudConfig:
             logger.info(f"   Cluster: {info['cluster_name']}")
             logger.info(f"   Version: {info['version']['number']}")
 
-            # Check cluster health (skip for Serverless - not supported)
-            if self.cloud_id:  # Only for traditional deployments
+            # Check cluster health (not available for all deployment types)
+            if self.cloud_id:  # Traditional deployments support cluster health
                 try:
                     health = self.es.cluster.health()
                     logger.info(f"   Status: {health['status']}")
                 except Exception:
-                    logger.info(f"   Status: N/A (Serverless)")
+                    logger.info(f"   Status: N/A (cluster.health not available)")
             else:
-                logger.info(f"   Status: N/A (Serverless - cluster.health not available)")
+                logger.info(f"   Status: N/A (cluster.health not available for this deployment type)")
 
         except AuthenticationException:
             logger.error("Authentication failed - check your API key")
@@ -136,7 +136,7 @@ class ElasticCloudConfig:
 
     def health_check(self) -> dict:
         """
-        Perform health check (Serverless compatible)
+        Perform health check (works with both traditional and serverless deployments)
 
         Returns:
             dict with health status
@@ -164,19 +164,19 @@ class ElasticCloudConfig:
                     })
                 except Exception:
                     result.update({
-                        "cluster_status": "N/A (Serverless)",
-                        "cluster_name": "Serverless",
+                        "cluster_status": "N/A (cluster.health not available)",
+                        "cluster_name": "N/A",
                         "number_of_nodes": "N/A",
                         "active_shards": "N/A"
                     })
             else:
-                # Serverless mode
+                # Endpoint-based connection (may be serverless or custom)
                 info = self.es.info()
                 result.update({
-                    "cluster_status": "Serverless",
+                    "cluster_status": "N/A (cluster.health not available)",
                     "cluster_name": info.get('cluster_name', 'N/A'),
-                    "number_of_nodes": "N/A (Serverless)",
-                    "active_shards": "N/A (Serverless)"
+                    "number_of_nodes": "N/A",
+                    "active_shards": "N/A"
                 })
 
             return result
@@ -186,9 +186,9 @@ class ElasticCloudConfig:
             return {"error": str(e)}
 
     def _check_elser(self) -> bool:
-        """Check if ELSER inference endpoint is available (Serverless compatible)"""
+        """Check if ELSER inference endpoint is available"""
         try:
-            # Check for inference endpoint (Serverless/modern approach)
+            # Check for inference endpoint (modern approach)
             inference_id = "elser-incident-analysis"
             try:
                 endpoint = self.es.inference.get(inference_id=inference_id)
@@ -209,10 +209,10 @@ class ElasticCloudConfig:
 
     def create_indices_if_not_exist(self):
         """
-        Create required indices if they don't exist (Serverless compatible)
+        Create required indices if they don't exist
 
         IMPORTANT: The incident-logs index with ELSER semantic_text field
-        should be created by running setup_elser_serverless.py first.
+        should be created by running setup_elser.py first.
         This method only creates the memory indices.
         """
         logger.info("Checking indices...")
@@ -221,11 +221,11 @@ class ElasticCloudConfig:
         is_serverless = not self.cloud_id
 
         # Incident logs index with ELSER
-        # NOTE: This index should be created by setup_elser_serverless.py
+        # NOTE: This index should be created by setup_elser.py
         # which properly configures semantic_text field with inference endpoint
         if not self.es.indices.exists(index=self.index_logs):
             logger.warning(f"Index '{self.index_logs}' does not exist!")
-            logger.warning("Please run 'python setup_elser_serverless.py' first to create the index with ELSER configuration.")
+            logger.warning("Please run 'python setup_elser.py' first to create the index with ELSER configuration.")
             logger.warning("Skipping automatic creation to avoid incorrect schema.")
 
 
