@@ -28,6 +28,58 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 
+def detect_elser_model(es: Elasticsearch):
+    """
+    Detect available ELSER model based on platform and available models
+    """
+    import platform
+    
+    # Try to find available models
+    possible_models = [
+        '.elser_model_2',  # Platform agnostic (preferred)
+        '.elser_model_2_linux-x86_64',
+        '.elser_model_2_linux-aarch64',
+        '.elser_model_2_darwin-x86_64',
+        '.elser_model_2_darwin-aarch64'
+    ]
+    
+    # Check platform
+    system = platform.system()
+    machine = platform.machine()
+    
+    logger.info(f"Platform: {system} {machine}")
+    
+    # Try to find available model
+    for model_id in possible_models:
+        try:
+            stats = es.ml.get_trained_models_stats(model_id=model_id)
+            if stats.get('trained_model_stats'):
+                logger.info(f"Found available model: {model_id}")
+                return model_id
+        except Exception:
+            continue
+    
+    # If no model found, try to list all models
+    try:
+        models = es.ml.get_trained_models()
+        for model in models.get('trained_model_configs', []):
+            model_id = model.get('model_id', '')
+            if 'elser' in model_id.lower():
+                logger.info(f"Found ELSER model: {model_id}")
+                return model_id
+    except Exception:
+        pass
+    
+    # Default to platform agnostic
+    logger.warning("Could not detect ELSER model, using platform agnostic: .elser_model_2")
+    logger.warning("")
+    logger.warning("⚠️  IMPORTANT: If this fails, you need to download the ELSER model first:")
+    logger.warning("   1. Via Kibana: Machine Learning → Trained Models → Import/Download .elser_model_2")
+    logger.warning("   2. Or the model will be downloaded automatically on first use")
+    logger.warning("")
+    return '.elser_model_2'
+
+
 def create_inference_endpoint(es: Elasticsearch):
     """
     Create Inference Endpoint for ELSER
@@ -51,22 +103,43 @@ def create_inference_endpoint(es: Elasticsearch):
     except Exception:
         pass  # Endpoint doesn't exist, create it
 
+    # Detect available model
+    model_id = detect_elser_model(es)
+    
     # Create inference endpoint
     logger.info(f"Creating inference endpoint: {inference_id}")
+    logger.info(f"Using model: {model_id}")
 
     try:
-        es.inference.put(
-            inference_id=inference_id,
-            task_type='sparse_embedding',  # ELSER uses sparse embeddings
-            body={
-                'service': 'elser',
-                'service_settings': {
-                    'model_id': '.elser_model_2_linux-x86_64',  # Base model ID
-                    'num_allocations': 1,  # Number of model allocations
-                    'num_threads': 1  # Threads per allocation
+        # Try modern API first (Elasticsearch 8.11+)
+        try:
+            es.inference.put(
+                inference_id=inference_id,
+                task_type='sparse_embedding',
+                body={
+                    'service': 'elasticsearch',  # Modern service name
+                    'service_settings': {
+                        'model_id': model_id,
+                        'num_allocations': 1,
+                        'num_threads': 1
+                    }
                 }
-            }
-        )
+            )
+        except Exception as e1:
+            # Fallback to legacy 'elser' service
+            logger.info("Trying legacy 'elser' service...")
+            es.inference.put(
+                inference_id=inference_id,
+                task_type='sparse_embedding',
+                body={
+                    'service': 'elser',  # Legacy service name
+                    'service_settings': {
+                        'model_id': model_id,
+                        'num_allocations': 1,
+                        'num_threads': 1
+                    }
+                }
+            )
 
         logger.info(f"Inference endpoint '{inference_id}' created successfully!")
         logger.info("")
